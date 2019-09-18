@@ -7,6 +7,7 @@ from skimage.io import imread
 
 import neural_renderer as nr
 import utils
+import cv2
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
 data_dir = os.path.join(current_dir, 'data')
@@ -27,10 +28,15 @@ class TestRasterizeSilhouettes(unittest.TestCase):
         images = renderer(vertices, faces, mode='silhouettes')
         images = images.detach().cpu().numpy()
         image = images[2]
-
+        # all part sum together is the whole silhouette
+        image = image.sum(axis=0)
         # load reference image by blender
         ref = imread(os.path.join(data_dir, 'teapot_blender.png'))
         ref = (ref.min(-1) != 255).astype(np.float32)
+
+        cv2.imshow("0", image)
+        cv2.imshow("1", ref)
+        cv2.waitKey()
 
         assert(np.allclose(ref, image))
 

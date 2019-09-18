@@ -7,6 +7,7 @@ from skimage.io import imread
 
 import neural_renderer as nr
 import utils
+import cv2
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
 data_dir = os.path.join(current_dir, 'data')
@@ -27,11 +28,10 @@ class TestRasterizeDepth(unittest.TestCase):
         images = images.detach().cpu().numpy()
         image = images[2]
         image = image != image.max()
-
         # load reference image by blender
         ref = imread(os.path.join(data_dir, 'teapot_blender.png'))
         ref = (ref.min(axis=-1) != 255).astype(np.float32)
-
+        image = image.astype(np.float32)
         assert(np.allclose(ref, image))
 
     def test_forward_case2(self):

@@ -35,9 +35,12 @@ at::Tensor backward_pixel_map_cuda(
         at::Tensor face_index_map,
         at::Tensor rgb_map,
         at::Tensor alpha_map,
+        at::Tensor depth_map,
         at::Tensor grad_rgb_map,
         at::Tensor grad_alpha_map,
         at::Tensor grad_faces,
+        int32_t mask_index_from,
+        int32_t mask_index_to,
         int image_size,
         float eps,
         int return_rgb,
@@ -126,9 +129,12 @@ at::Tensor backward_pixel_map(
         at::Tensor face_index_map,
         at::Tensor rgb_map,
         at::Tensor alpha_map,
+        at::Tensor depth_map,
         at::Tensor grad_rgb_map,
         at::Tensor grad_alpha_map,
         at::Tensor grad_faces,
+        int32_t mask_index_from,
+        int32_t mask_index_to,
         int image_size,
         float eps,
         int return_rgb,
@@ -138,12 +144,14 @@ at::Tensor backward_pixel_map(
     CHECK_INPUT(face_index_map);
     CHECK_INPUT(rgb_map);
     CHECK_INPUT(alpha_map);
+    CHECK_INPUT(depth_map);
     CHECK_INPUT(grad_rgb_map);
     CHECK_INPUT(grad_alpha_map);
     CHECK_INPUT(grad_faces);
 
-    return backward_pixel_map_cuda(faces, face_index_map, rgb_map, alpha_map,
+    return backward_pixel_map_cuda(faces, face_index_map, rgb_map, alpha_map, depth_map,
                                    grad_rgb_map, grad_alpha_map, grad_faces,
+                                   mask_index_from, mask_index_to,
                                    image_size, eps, return_rgb, return_alpha);
 }
 

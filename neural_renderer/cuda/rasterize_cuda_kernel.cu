@@ -247,11 +247,14 @@ __global__ void backward_pixel_map_cuda_kernel(
         int32_t*  face_index_map,
         scalar_t*  rgb_map,
         scalar_t*  alpha_map,
+        scalar_t*  depth_map,
         scalar_t*  grad_rgb_map,
         scalar_t*  grad_alpha_map,
         scalar_t*  grad_faces,
         size_t batch_size,
         size_t num_faces,
+        int32_t mask_index_from,
+        int32_t mask_index_to,
         int image_size,
         scalar_t eps,
         int return_rgb,
@@ -260,40 +263,78 @@ __global__ void backward_pixel_map_cuda_kernel(
     if (i >= batch_size * num_faces) {
         return;
     }
+    // printf("%d/%d/%d, %d[%d]\n", blockIdx.x, blockDim.x, threadIdx.x, int(i/num_faces), i % num_faces) ;
+
+     /**
+     * each cuda block for 1 single face
+     * bn: n-th batch
+     * fn: n-th face
+     * is: 2D range (x,y) in [0, is-1]
+     */
     const int bn = i / num_faces;
     const int fn = i % num_faces;
+    const int is_fn_in_mask = ((mask_index_from <= fn) && (fn < mask_index_to));
     const int is = image_size;
     const scalar_t* face = &faces[i * 9];
     scalar_t grad_face[9] = {};
 
     /* check backside */
+        /**
+     * face => {0,1,2; 3,4,5;,6,7,8}
+     *  vtx => {(x1,y1,z1); (x2,y2,z2); (x3,y3,z3)}
+     */
     if ((face[7] - face[1]) * (face[3] - face[0]) < (face[4] - face[1]) * (face[6] - face[0]))
         return;
-
+    if (!is_fn_in_mask)
+        return;
     /* for each edge */
     for (int edge_num = 0; edge_num < 3; edge_num++) {
         /* set points of target edge */
+        /**
+         * edge_num = 0,1,2
+         *   i.e. edge = 0: pi = {0,1,2}, pp = (face{(0,1), (3,4), (6,7)} * is + is - 1) * .5  =>  {(x0,y0), (x1,y1), (x2,y2)}
+         *        edge = 1: pi = {1,2,0}, pp = (face{(3,4), (6,7), (0,1)} * is + is - 1) * .5  =>  {(x1,y1), (x2,y2), (x0,y0)}
+         *        edge = 2: pi = {2,0,1}, pp = (face{(6,7), (0,1), (3,4)} * is + is - 1) * .5  =>  {(x2,y2), (x0,y0), (x1,y1)}
+         *   pp => float
+         */
         int pi[3];
-        scalar_t pp[3][2];
+        // Min Wang 2019.2.19
+        scalar_t pp[3][3];
         for (int num = 0; num < 3; num++)
             pi[num] = (edge_num + num) % 3;
         for (int num = 0; num < 3; num++) {
             for (int dim = 0; dim < 2; dim++) {
                 pp[num][dim] = 0.5 * (face[3 * pi[num] + dim] * is + is - 1);
             }
+            pp[num][2] = face[3 * pi[num] + 2];
         }
 
         /* for dy, dx */
         for (int axis = 0; axis < 2; axis++) {
-            /* */
-            scalar_t p[3][2];
+            /* shift axis */
+            /**
+             * axis = 0,1, switch x,y coord
+             * see edge-0 for example
+             *   i.e. axis = 0: p = pp{[(0,0),(0,1)], [(1,0),(1,1)], [(2,0),(2,1)]}  =>  {(x0,y0), (x1,y1), (x2,y2)}
+             *        axis = 1: p = pp{[(0,1),(0,0)], [(1,1),(1,0)], [(2,1),(2,0)]}  =>  {(y0,x0), (y1,x1), (y2,x2)}
+             */
+            scalar_t p[3][3];
             for (int num = 0; num < 3; num++) {
                 for (int dim = 0; dim < 2; dim++) {
                     p[num][dim] = pp[num][(dim + axis) % 2];
                 }
+                p[num][2] = pp[num][2];
             }
 
-            /* set direction */
+            
+            /**
+             * see x-axis for example: 
+             *    x0  <  x1 => d = -1, p0 at left of p1
+             *    x0  >= x1 => d = +1, p0 at right of p1
+             *    y0  <  y1 => d = +1, p0 below p1
+             *    y0  >= y1 => d = -1, p0 above p1
+             */
+             /* set direction */
             int direction;
             if (axis == 0) {
                 if (p[0][0] < p[1][0])
@@ -305,6 +346,24 @@ __global__ void backward_pixel_map_cuda_kernel(
                     direction = 1;
                 else
                     direction = -1;
+            }
+            // get the depth of three vertices
+            scalar_t depth_p0 = p[0][2];
+            scalar_t depth_p1 = p[1][2];
+            scalar_t depth_p2 = p[2][2];
+            
+            // calc the weights for depth computing
+            /* compute face_inv */
+            scalar_t p_inv[9] = {
+                p[1][1] - p[2][1], p[2][0] - p[1][0], p[1][0] * p[2][1] - p[2][0] * p[1][1],
+                p[2][1] - p[0][1], p[0][0] - p[2][0], p[2][0] * p[0][1] - p[0][0] * p[2][1],
+                p[0][1] - p[1][1], p[1][0] - p[0][0], p[0][0] * p[1][1] - p[1][0] * p[0][1]};
+            scalar_t p_inv_denominator = (
+                p[2][0] * (p[0][1] - p[1][1]) +
+                p[0][0] * (p[1][1] - p[2][1]) +
+                p[1][0] * (p[2][1] - p[0][1]));
+            for (int k = 0; k < 9; k++) {
+                p_inv[k] /= p_inv_denominator;
             }
 
             /* along edge */
@@ -341,9 +400,13 @@ __global__ void backward_pixel_map_cuda_kernel(
                     map_index_in = bn * is * is + d0 * is + d1_in;
                     map_index_out = bn * is * is + d0 * is + d1_out;
                 }
+                // int is_in_in_mask = ((mask_index_from <= face_index_map[map_index_in]) && (face_index_map[map_index_in] < mask_index_to));
+                int is_out_in_mask = ((mask_index_from <= face_index_map[map_index_out]) && (face_index_map[map_index_out] < mask_index_to));
                 if (return_alpha) {
-                    alpha_in = alpha_map[map_index_in];
-                    alpha_out = alpha_map[map_index_out];
+                    // alpha_in = alpha_map[map_index_in]; //TODO: alway 1
+                    // alpha_out = alpha_map[map_index_out]; //TODO: alpha_out*[out_indexmap]_is_in_mask
+                    alpha_in = 1.0; //TODO: alway 1
+                    alpha_out = alpha_map[map_index_out] * is_out_in_mask; //TODO: alpha_out*[out_indexmap]_is_in_mask
                 }
                 if (return_rgb) {
                     rgb_in = &rgb_map[map_index_in * 3];
@@ -351,7 +414,8 @@ __global__ void backward_pixel_map_cuda_kernel(
                 }
 
                 /* out */
-                bool is_in_fn = (face_index_map[map_index_in] == fn);
+                // bool is_in_fn = (face_index_map[map_index_in] == fn); 
+                bool is_in_fn = 1;
                 if (is_in_fn) {
                     int d1_limit;
                     if (0 < direction)
@@ -360,6 +424,10 @@ __global__ void backward_pixel_map_cuda_kernel(
                         d1_limit = 0;
                     int d1_from = max(min(d1_out, d1_limit), 0);
                     int d1_to = min(max(d1_out, d1_limit), is - 1);
+                    /*
+                    Only grad_alpha_map is part-splited. index_map and alpha_map are full map.
+                    */
+                    int32_t*  face_index_map_p;
                     scalar_t* alpha_map_p;
                     scalar_t* grad_alpha_map_p;
                     scalar_t* rgb_map_p;
@@ -373,6 +441,7 @@ __global__ void backward_pixel_map_cuda_kernel(
                         map_offset = 1;
                         map_index_from = bn * is * is + d0 * is + d1_from;
                     }
+                    face_index_map_p = &face_index_map[map_index_from];
                     if (return_alpha) {
                         alpha_map_p = &alpha_map[map_index_from];
                         grad_alpha_map_p = &grad_alpha_map[map_index_from];
@@ -383,14 +452,19 @@ __global__ void backward_pixel_map_cuda_kernel(
                     }
                     for (int d1 = d1_from; d1 <= d1_to; d1++) {
                         scalar_t diff_grad = 0;
+                        int is_p_in_mask = ((mask_index_from <= *face_index_map_p) && (*face_index_map_p < mask_index_to));
+                        // TODO: multiply mask sign
                         if (return_alpha) {
-                            diff_grad += (*alpha_map_p - alpha_in) * *grad_alpha_map_p;
+                            diff_grad += (*alpha_map_p * is_p_in_mask - alpha_in) * *grad_alpha_map_p;
+                            // diff_grad += (*alpha_map_p - alpha_in) * *grad_alpha_map_p;
                         }
                         if (return_rgb) {
                             for (int k = 0; k < 3; k++)
-                                diff_grad += (rgb_map_p[k] - rgb_in[k]) * grad_rgb_map_p[k];
-                        }
-                        if (return_alpha) {
+                            diff_grad += (rgb_map_p[k] * is_p_in_mask - rgb_in[k] * is_fn_in_mask) * grad_rgb_map_p[k];
+                            // diff_grad += (rgb_map_p[k] - rgb_in[k]) * grad_rgb_map_p[k];
+                    }
+                    face_index_map_p += map_offset;
+                    if (return_alpha) {
                             alpha_map_p += map_offset;
                             grad_alpha_map_p += map_offset;
                         }
@@ -431,6 +505,7 @@ __global__ void backward_pixel_map_cuda_kernel(
                     int d1_to = min(max(d1_in, d1_limit), is - 1);
 
                     int* face_index_map_p;
+                    scalar_t* depth_map_p;
                     scalar_t* alpha_map_p;
                     scalar_t* grad_alpha_map_p;
                     scalar_t* rgb_map_p;
@@ -448,6 +523,8 @@ __global__ void backward_pixel_map_cuda_kernel(
                         map_index_from = bn * is * is + d0 * is + d1_from;
                     }
                     face_index_map_p = &face_index_map[map_index_from] - map_offset;
+                    depth_map_p = &depth_map[map_index_from] - map_offset;
+
                     if (return_alpha) {
                         alpha_map_p = &alpha_map[map_index_from] - map_offset;
                         grad_alpha_map_p = &grad_alpha_map[map_index_from] - map_offset;
@@ -459,6 +536,8 @@ __global__ void backward_pixel_map_cuda_kernel(
 
                     for (int d1 = d1_from; d1 <= d1_to; d1++) {
                         face_index_map_p += map_offset;
+                        depth_map_p += map_offset;
+
                         if (return_alpha) {
                             alpha_map_p += map_offset;
                             grad_alpha_map_p += map_offset;
@@ -467,39 +546,156 @@ __global__ void backward_pixel_map_cuda_kernel(
                             rgb_map_p += 3 * map_offset;
                             grad_rgb_map_p += 3 * map_offset;
                         }
+                        // Min Wang 2019.2.19
+                        // Add the gradient of Z axis
+                        // If the face_index is not fn, but GT_alpha_p is 1, means we need "lift up" the face
+                        // If the face_index is fn, but GT_alpha_p wanna be 0, means we need "push down" the face
+                        // However, we don't know the 2nd depth value, so whever we want to lift a face, we push down the top face as well
+                        /*
                         if (*face_index_map_p != fn)
                             continue;
+                        */
 
                         scalar_t diff_grad = 0;
+                        scalar_t diff_grad_updown = 0;
+
+                        int is_p_in_mask = ((mask_index_from <= *face_index_map_p) && (*face_index_map_p < mask_index_to));
+                        
+                        if (*face_index_map_p == fn) {
+                            //If the top face is itself, the pixel could only from 1 to 0
+                            // grad_alpha_map_p = 2(alpha_p - GT_alpha__p)
+                            // so grad_alpha_map_p >= 0
                         if (return_alpha) {
-                            diff_grad += (*alpha_map_p - alpha_out) * *grad_alpha_map_p;
+                                // diff_grad += (*alpha_map_p - alpha_out) * *grad_alpha_map_p;
+                                diff_grad += (*alpha_map_p * is_p_in_mask - alpha_out) * *grad_alpha_map_p;
                         }
                         if (return_rgb) {
                             for (int k = 0; k < 3; k++)
-                                diff_grad += (rgb_map_p[k] - rgb_out[k]) * grad_rgb_map_p[k];
+                                    // diff_grad += (rgb_map_p[k] - rgb_out[k]) * grad_rgb_map_p[k];
+                                    diff_grad += (rgb_map_p[k] * is_p_in_mask - rgb_out[k]) * grad_rgb_map_p[k];
                         }
-                        if (diff_grad <= 0)
-                            continue;
-
-                        if (p[1][0] != d0) {
-                            scalar_t dist = (p[1][0] - p[0][0]) / (p[1][0] - d0) * (d1 - d1_cross) * 2. / is;
-                            dist = (0 < dist) ? dist + eps : dist - eps;
-                            grad_face[pi[0] * 3 + (1 - axis)] -= diff_grad / dist;
+                        if (diff_grad > 0) {
+                            if (p[1][0] != d0) {
+                                scalar_t dist = (p[1][0] - p[0][0]) / (p[1][0] - d0) * (d1 - d1_cross) * 2. / is;
+                                dist = (0 < dist) ? dist + eps : dist - eps;
+                                grad_face[pi[0] * 3 + (1 - axis)] -= diff_grad / dist;
+                            }
+                            if (p[0][0] != d0) {
+                                scalar_t dist = (p[1][0] - p[0][0]) / (d0 - p[0][0]) * (d1 - d1_cross) * 2. / is;
+                                dist = (0 < dist) ? dist + eps : dist - eps;
+                                grad_face[pi[1] * 3 + (1 - axis)] -= diff_grad / dist;
+                            }
                         }
-                        if (p[0][0] != d0) {
-                            scalar_t dist = (p[1][0] - p[0][0]) / (d0 - p[0][0]) * (d1 - d1_cross) * 2. / is;
-                            dist = (0 < dist) ? dist + eps : dist - eps;
-                            grad_face[pi[1] * 3 + (1 - axis)] -= diff_grad / dist;
+                    } else { 
+                        // If the top face is not itself, the pixel could only from 0 to 1
+                        // so grad_alpha_map_p <=0
+                        // when axis=0, each pixel will be scan twice. So we don't need scan any more.
+                        // the x,y of p is d1, d0 when axis=0
+                        
+                        if (axis == 1) continue;
+                        if (return_alpha) {
+                            diff_grad_updown += (*alpha_map_p * is_p_in_mask - 1) * *grad_alpha_map_p;
+                        }
+                        if (diff_grad_updown <=0) continue;
+                        // get the top face
+                        const scalar_t* face_top = &faces[*face_index_map_p * 9];
+                        // calc the depth of p (in face[fn])
+                        /* compute w = face_inv * p */
+                            scalar_t w[3];
+                            w[0] = p_inv[3 * 0 + 0] * d1 + p_inv[3 * 0 + 1] * d0 + p_inv[3 * 0 + 2];
+                            w[1] = p_inv[3 * 1 + 0] * d1 + p_inv[3 * 1 + 1] * d0 + p_inv[3 * 1 + 2];
+                            w[2] = p_inv[3 * 2 + 0] * d1 + p_inv[3 * 2 + 1] * d0 + p_inv[3 * 2 + 2];
+                            scalar_t w_sum = 0;
+                            for (int k = 0; k < 3; k++) {
+                                w[k] = min(max(w[k], 0.), 1.);
+                                w_sum += w[k];
+                            }
+                            for (int k = 0; k < 3; k++) {
+                                w[k] /= w_sum;
+                            }
+                            scalar_t zp = 1. / (w[0] / depth_p0 + w[1] / depth_p1 + w[2] / depth_p2);
+                        if (zp > *depth_map_p) {
+                            // current face lift up 
+                            scalar_t dist_depth_p = *depth_map_p - zp;
+                            for (int lift_point=0; lift_point<3; ++lift_point) {
+                                int p1 = (lift_point + 1) % 3;
+                                int p2 = (lift_point + 2) % 3;
+                                scalar_t x0 = p[lift_point][0];
+                                scalar_t y0 = p[lift_point][1];
+                                scalar_t z0 = p[lift_point][2];
+                                scalar_t x1 = p[p1][0];
+                                scalar_t y1 = p[p1][1];
+                                scalar_t z1 = p[p1][2];
+                                scalar_t x2 = p[p2][0];
+                                scalar_t y2 = p[p2][1];
+                                scalar_t z2 = p[p2][2];
+                                scalar_t xp = d1;
+                                scalar_t yp = d0;
+                                scalar_t h0 = ((x0-x1)*(y2-y1)-(y0-y1)*(x2-x1)) * ((x0-x1)*(y2-y1)-(y0-y1)*(x2-x1)) +
+                                              ((x0-x1)*(z2-z1)-(z0-z1)*(x2-x1)) * ((x0-x1)*(z2-z1)-(z0-z1)*(x2-x1)) +
+                                              ((y0-y1)*(z2-z1)-(z0-z1)*(y2-y1)) * ((y0-y1)*(z2-z1)-(z0-z1)*(y2-y1));
+                                scalar_t hp = ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) * ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) +
+                                              ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) * ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) +
+                                              ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1)) * ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1));
+                                scalar_t dist = dist_depth_p * sqrt(h0/hp);
+                                // scalar_t dist = dist_depth_p / ((p[p2][0]-p[p1][0])*(d0-p[p1][1])-(d1-p[p1][0])*(p[p2][1]-p[p1][1])) *
+                                //         ((p[p2][0]-p[p1][0])*(p[lift_point][1]-p[p1][1])-(p[lift_point][0]-p[p1][0])*(p[p2][1]-p[p1][1]));
+                                dist = (0 < dist) ? dist + eps : dist - eps;
+                                if (dist > 0 ) {
+                                    printf("<%d, %d> in [%d] z:%.2f top_z:%.2f alpha:%d dist:%.2f lift:%d <%.0f %.0f %.0f> <%.0f %.0f %.0f> <%.0f %.0f %.0f>\n",
+                                     d1, d0, fn, zp, *depth_map_p, *alpha_map_p, dist, lift_point, 
+                                     p[lift_point][0], p[lift_point][1], p[lift_point][2],
+                                     p[p1][0], p[p1][1], p[p1][2],
+                                     p[p2][0], p[p2][1], p[p2][2]);
+                                }
+                                grad_face[pi[lift_point] * 3 + 2] -= is * diff_grad_updown / dist;
+                            }
+                            // top face push down
+                            scalar_t pt[3][3];
+                            for (int num = 0; num < 3; num++) {
+                                for (int dim = 0; dim < 2; dim++) {
+                                    pt[num][dim] = 0.5 * (face_top[3 * num + dim] * is + is - 1);
+                                }
+                                pt[num][2] = face_top[3 * num + 2];
+                            }
+                            for (int down_point=0; down_point<3; ++down_point) {
+                                int p1 = (down_point + 1) % 3;
+                                int p2 = (down_point + 2) % 3;
+                                scalar_t x0 = pt[down_point][0];
+                                scalar_t y0 = pt[down_point][1];
+                                scalar_t z0 = pt[down_point][2];
+                                scalar_t x1 = pt[p1][0];
+                                scalar_t y1 = pt[p1][1];
+                                scalar_t z1 = pt[p1][2];
+                                scalar_t x2 = pt[p2][0];
+                                scalar_t y2 = pt[p2][1];
+                                scalar_t z2 = pt[p2][2];
+                                scalar_t xp = d1;
+                                scalar_t yp = d0;
+                                scalar_t zp = *depth_map_p;
+                                scalar_t h0 = ((x0-x1)*(y2-y1)-(y0-y1)*(x2-x1)) * ((x0-x1)*(y2-y1)-(y0-y1)*(x2-x1)) +
+                                              ((x0-x1)*(z2-z1)-(z0-z1)*(x2-x1)) * ((x0-x1)*(z2-z1)-(z0-z1)*(x2-x1)) +
+                                              ((y0-y1)*(z2-z1)-(z0-z1)*(y2-y1)) * ((y0-y1)*(z2-z1)-(z0-z1)*(y2-y1));
+                                scalar_t hp = ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) * ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) +
+                                              ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) * ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) +
+                                              ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1)) * ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1));
+                                scalar_t dist = - dist_depth_p * sqrt(h0/hp);
+                                // scalar_t dist = -dist_depth_p / ((pt[p2][0]-pt[p1][0])*(d0-pt[p1][1])-(d1-pt[p1][0])*(pt[p2][1]-pt[p1][1])) *
+                                //         ((pt[p2][0]-pt[p1][0])*(pt[down_point][1]-pt[p1][1])-(pt[down_point][0]-pt[p1][0])*(pt[p2][1]-pt[p1][1]));
+                                dist = (0 < dist) ? dist + eps : dist - eps;
+                                grad_faces[*face_index_map_p * 9 + down_point * 3 + 2] -= is * diff_grad_updown / dist;
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
 
     /* set to global gradient variable */
     for (int k = 0; k < 9; k++)
-        grad_faces[i * 9 + k] = grad_face[k];
+        grad_faces[i * 9 + k] += grad_face[k];
 }
 
 template <typename scalar_t>
@@ -695,9 +891,12 @@ at::Tensor backward_pixel_map_cuda(
         at::Tensor face_index_map,
         at::Tensor rgb_map,
         at::Tensor alpha_map,
+        at::Tensor depth_map,
         at::Tensor grad_rgb_map,
         at::Tensor grad_alpha_map,
         at::Tensor grad_faces,
+        int32_t mask_index_from,
+        int32_t mask_index_to,
         int image_size,
         float eps,
         int return_rgb,
@@ -705,7 +904,7 @@ at::Tensor backward_pixel_map_cuda(
     
     const auto batch_size = faces.size(0);
     const auto num_faces = faces.size(1);
-    const int threads = 512;
+    const int threads = 256;
     const dim3 blocks ((batch_size * num_faces - 1) / threads + 1);
 
     AT_DISPATCH_FLOATING_TYPES(faces.type(), "backward_pixel_map_cuda", ([&] {
@@ -714,11 +913,14 @@ at::Tensor backward_pixel_map_cuda(
           face_index_map.data<int32_t>(),
           rgb_map.data<scalar_t>(),
           alpha_map.data<scalar_t>(),
+          depth_map.data<scalar_t>(),
           grad_rgb_map.data<scalar_t>(),
           grad_alpha_map.data<scalar_t>(),
           grad_faces.data<scalar_t>(),
           batch_size,
-		  num_faces,
+          num_faces,
+          mask_index_from,
+          mask_index_to,
           image_size,
           (scalar_t) eps,
           return_rgb,
@@ -743,7 +945,7 @@ at::Tensor backward_textures_cuda(
     const auto batch_size = face_index_map.size(0);
     const auto image_size = face_index_map.size(1);
     const auto texture_size = grad_textures.size(2);
-    const int threads = 512;
+    const int threads = 256;
     const dim3 blocks ((batch_size * image_size * image_size - 1) / threads + 1);
 
     AT_DISPATCH_FLOATING_TYPES(sampling_weight_map.type(), "backward_textures_cuda", ([&] {
@@ -777,7 +979,7 @@ at::Tensor backward_depth_map_cuda(
 
     const auto batch_size = faces.size(0);
     const auto num_faces = faces.size(1);
-    const int threads = 512;
+    const int threads = 256;
     const dim3 blocks ((batch_size * image_size * image_size - 1) / threads + 1);
 
     AT_DISPATCH_FLOATING_TYPES(faces.type(), "backward_depth_map_cuda", ([&] {

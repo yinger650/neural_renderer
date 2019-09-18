@@ -11,7 +11,7 @@ import neural_renderer as nr
 class Renderer(nn.Module):
     def __init__(self, image_size=256, anti_aliasing=True, background_color=[0,0,0],
                  fill_back=True, camera_mode='projection',
-                 K=None, R=None, t=None, dist_coeffs=None, orig_size=1024,
+                 K=None, R=None, t=None, P=None, bbox=None, dist_coeffs=None, orig_size=1024,
                  perspective=True, viewing_angle=30, camera_direction=[0,0,1],
                  near=0.1, far=100,
                  light_intensity_ambient=0.5, light_intensity_directional=0.5,
@@ -40,6 +40,30 @@ class Renderer(nn.Module):
             if dist_coeffs is None:
                 self.dist_coeffs = torch.cuda.FloatTensor([[0., 0., 0., 0., 0.]])
             self.orig_size = orig_size
+        elif self.camera_mode == 'projection_P':
+            self.P = P
+            if isinstance(self.P, numpy.ndarray):
+                self.P = torch.cuda.FloatTensor(self.P)
+            if self.P is None or P.ndimension() != 3 or self.P.shape[1] != 3 or self.P.shape[2] != 4:
+                raise ValueError('You need to provide a valid (batch_size)x3x4 projection matrix')
+            self.dist_coeffs = dist_coeffs
+            if dist_coeffs is None:
+                self.dist_coeffs = torch.cuda.FloatTensor([[0., 0., 0., 0., 0.]]).repeat(P.shape[0], 1)
+            self.orig_size = orig_size
+        elif self.camera_mode == "projection_bbox":
+            self.K = K
+            if isinstance(self.K, numpy.ndarray):
+                self.K = torch.cuda.FloatTensor(self.K)
+            if self.K is None or self.K.ndimension() != 3 or self.K.shape[1] != 3 or self.K.shape[2] != 3:
+                raise ValueError('You need to provide a valid (batch_size)x3x3 intrinsic matrix')
+            self.dist_coeffs = dist_coeffs
+            if dist_coeffs is None:
+                self.dist_coeffs = torch.cuda.FloatTensor([[0., 0., 0., 0., 0.]]).repeat(K.shape[0], 1)
+            self.bbox = bbox
+            if self.bbox is None or bbox.ndimension() != 2 or bbox.shape[1] != 3:
+                raise ValueError('You need to provide a valid (batch_size)x3 bbox info')
+
+
         elif self.camera_mode in ['look', 'look_at']:
             self.perspective = perspective
             self.viewing_angle = viewing_angle
@@ -62,24 +86,24 @@ class Renderer(nn.Module):
         # rasterization
         self.rasterizer_eps = 1e-3
 
-    def forward(self, vertices, faces, textures=None, mode=None, K=None, R=None, t=None, dist_coeffs=None, orig_size=None):
+    def forward(self, vertices, faces, textures=None, mode=None, K=None, R=None, t=None, dist_coeffs=None, P=None, bbox=None, orig_size=None, part_mask=None):
         '''
         Implementation of forward rendering method
         The old API is preserved for back-compatibility with the Chainer implementation
         '''
         
         if mode is None:
-            return self.render(vertices, faces, textures, K, R, t, dist_coeffs, orig_size)
+            return self.render(vertices, faces, textures, K, R, t, dist_coeffs, P, bbox, orig_size, part_mask)
         elif mode is 'rgb':
-            return self.render_rgb(vertices, faces, textures, K, R, t, dist_coeffs, orig_size)
+            return self.render_rgb(vertices, faces, textures, K, R, t, dist_coeffs, P, bbox, orig_size, part_mask)
         elif mode == 'silhouettes':
-            return self.render_silhouettes(vertices, faces, K, R, t, dist_coeffs, orig_size)
+            return self.render_silhouettes(vertices, faces, K, R, t, dist_coeffs, P, bbox, orig_size, part_mask)
         elif mode == 'depth':
-            return self.render_depth(vertices, faces, K, R, t, dist_coeffs, orig_size)
+            return self.render_depth(vertices, faces, K, R, t, dist_coeffs, P, bbox, orig_size, part_mask)
         else:
             raise ValueError("mode should be one of None, 'silhouettes' or 'depth'")
 
-    def render_silhouettes(self, vertices, faces, K=None, R=None, t=None, dist_coeffs=None, orig_size=None):
+    def render_silhouettes(self, vertices, faces, K=None, R=None, t=None, dist_coeffs=None, P=None, bbox=None, orig_size=None, part_mask=None):
 
         # fill back
         if self.fill_back:
@@ -108,13 +132,32 @@ class Renderer(nn.Module):
             if orig_size is None:
                 orig_size = self.orig_size
             vertices = nr.projection(vertices, K, R, t, dist_coeffs, orig_size)
+        elif self.camera_mode == "projection_P":
+            if P is None:
+                P = self.P
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_P(vertices, self.P, self.dist_coeffs, self.orig_size)
+        elif self.camera_mode == "projection_bbox":
+            if K is None:
+                K = self.K
+            if bbox is None:
+                bbox = self.bbox
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_bbox(vertices, self.K, self.dist_coeffs, self.bbox)
+
 
         # rasterization
         faces = nr.vertices_to_faces(vertices, faces)
-        images = nr.rasterize_silhouettes(faces, self.image_size, self.anti_aliasing)
+        images = nr.rasterize_silhouettes(faces, part_mask, self.image_size, self.anti_aliasing)
         return images
 
-    def render_depth(self, vertices, faces, K=None, R=None, t=None, dist_coeffs=None, orig_size=None):
+    def render_depth(self, vertices, faces, K=None, R=None, t=None, dist_coeffs=None, P=None, bbox=None, orig_size=None, part_mask=None):
 
         # fill back
         if self.fill_back:
@@ -143,13 +186,31 @@ class Renderer(nn.Module):
             if orig_size is None:
                 orig_size = self.orig_size
             vertices = nr.projection(vertices, K, R, t, dist_coeffs, orig_size)
+        elif self.camera_mode == "projection_P":
+            if P is None:
+                P = self.P
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_P(vertices, self.P, self.dist_coeffs, self.orig_size)
+        elif self.camera_mode == "projection_bbox":
+            if K is None:
+                K = self.K
+            if bbox is None:
+                bbox = self.bbox
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_bbox(vertices, self.K, self.dist_coeffs, self.bbox)
 
         # rasterization
         faces = nr.vertices_to_faces(vertices, faces)
-        images = nr.rasterize_depth(faces, self.image_size, self.anti_aliasing)
+        images = nr.rasterize_depth(faces, part_mask, self.image_size, self.anti_aliasing)
         return images
 
-    def render_rgb(self, vertices, faces, textures, K=None, R=None, t=None, dist_coeffs=None, orig_size=None):
+    def render_rgb(self, vertices, faces, textures, K=None, R=None, t=None, dist_coeffs=None, P=None, bbox=None, orig_size=None, part_mask=None):
         # fill back
         if self.fill_back:
             faces = torch.cat((faces, faces[:, :, list(reversed(range(faces.shape[-1])))]), dim=1).detach()
@@ -189,15 +250,33 @@ class Renderer(nn.Module):
             if orig_size is None:
                 orig_size = self.orig_size
             vertices = nr.projection(vertices, K, R, t, dist_coeffs, orig_size)
+        elif self.camera_mode == "projection_P":
+            if P is None:
+                P = self.P
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_P(vertices, self.P, self.dist_coeffs, self.orig_size)
+        elif self.camera_mode == "projection_bbox":
+            if K is None:
+                K = self.K
+            if bbox is None:
+                bbox = self.bbox
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_bbox(vertices, self.K, self.dist_coeffs, self.bbox)
 
         # rasterization
         faces = nr.vertices_to_faces(vertices, faces)
         images = nr.rasterize(
-            faces, textures, self.image_size, self.anti_aliasing, self.near, self.far, self.rasterizer_eps,
+            faces, textures, part_mask, self.image_size, self.anti_aliasing, self.near, self.far, self.rasterizer_eps,
             self.background_color)
         return images
 
-    def render(self, vertices, faces, textures, K=None, R=None, t=None, dist_coeffs=None, orig_size=None):
+    def render(self, vertices, faces, textures, K=None, R=None, t=None, dist_coeffs=None, P=None, bbox=None, orig_size=None, part_mask=None):
         # fill back
         if self.fill_back:
             faces = torch.cat((faces, faces[:, :, list(reversed(range(faces.shape[-1])))]), dim=1).detach()
@@ -237,10 +316,28 @@ class Renderer(nn.Module):
             if orig_size is None:
                 orig_size = self.orig_size
             vertices = nr.projection(vertices, K, R, t, dist_coeffs, orig_size)
+        elif self.camera_mode == "projection_P":
+            if P is None:
+                P = self.P
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_P(vertices, self.P, self.dist_coeffs, self.orig_size)
+        elif self.camera_mode == "projection_bbox":
+            if K is None:
+                K = self.K
+            if bbox is None:
+                bbox = self.bbox
+            if dist_coeffs is None:
+                dist_coeffs = self.dist_coeffs
+            if orig_size is None:
+                orig_size = self.orig_size
+            vertices = nr.projection_bbox(vertices, self.K, self.dist_coeffs, self.bbox)
 
         # rasterization
         faces = nr.vertices_to_faces(vertices, faces)
         out = nr.rasterize_rgbad(
-            faces, textures, self.image_size, self.anti_aliasing, self.near, self.far, self.rasterizer_eps,
+            faces, textures, part_mask, self.image_size, self.anti_aliasing, self.near, self.far, self.rasterizer_eps,
             self.background_color)
         return out['rgb'], out['depth'], out['alpha']
