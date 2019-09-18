@@ -3,12 +3,22 @@ import os
 
 import numpy as np
 from skimage.io import imsave
+import cv2
 
 import torch
 import neural_renderer as nr
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
 data_dir = os.path.join(current_dir, 'data')
+
+def ColorizeDepth(img_depth, near=1000, far=4000):
+    median = np.median(img_depth)
+    depth_norm = ((img_depth - near) / (far - near) * 255)
+    depth_norm[depth_norm > 255] = 255
+    depth_norm[depth_norm < 0] = 0
+    depth_norm = depth_norm.astype(np.uint8)
+    color_depth = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+    return color_depth
 
 class TestCore(unittest.TestCase):
     def test_tetrahedron(self):
@@ -48,9 +58,16 @@ class TestCore(unittest.TestCase):
             os.path.join(data_dir, '1cde62b063e14777c9152a706245d48/model.obj'), load_texture=True)
 
         renderer.eye = nr.get_points_from_angles(2, 15, 30)
-        images, _, _ = renderer.render(vertices[None, :, :], faces[None, :, :], textures[None, :, :, :, :, :])
+        images, depth, silhouette =  renderer.render(vertices[None, :, :], faces[None, :, :], textures[None, :, :, :, :, :])
         images = images.permute(0,2,3,1).detach().cpu().numpy()
+        silhouette = silhouette.detach().cpu().numpy()
+        depth = depth.detach().cpu().numpy()
         imsave(os.path.join(data_dir, 'car.png'), images[0])
+        cv2.imshow("r", images[0,:,:,::-1])
+        cv2.imshow("d",ColorizeDepth(depth[0],1.5,2.5))
+        cv2.imshow("s", silhouette[0])
+        cv2.waitKey()
+
 
         vertices, faces, textures = nr.load_obj(
             os.path.join(data_dir, '4e49873292196f02574b5684eaec43e9/model.obj'), load_texture=True, texture_size=16)
