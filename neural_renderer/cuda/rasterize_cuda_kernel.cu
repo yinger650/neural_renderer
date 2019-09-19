@@ -550,7 +550,7 @@ __global__ void backward_pixel_map_cuda_kernel(
                         // Add the gradient of Z axis
                         // If the face_index is not fn, but GT_alpha_p is 1, means we need "lift up" the face
                         // If the face_index is fn, but GT_alpha_p wanna be 0, means we need "push down" the face
-                        // However, we don't know the 2nd depth value, so whever we want to lift a face, we push down the top face as well
+                        // However, we don't know the 2nd depth value, so whenever we want to lift a face, we push down the top face as well
                         /*
                         if (*face_index_map_p != fn)
                             continue;
@@ -637,7 +637,9 @@ __global__ void backward_pixel_map_cuda_kernel(
                                 scalar_t hp = ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) * ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) +
                                               ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) * ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) +
                                               ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1)) * ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1));
-                                scalar_t dist = dist_depth_p * sqrt(h0/hp);
+                                scalar_t dist = dist_depth_p * (exp(sqrt(h0/hp))+1);  // log on h0/hp (1, +inf)
+                                // scalar_t dist = -exp(-dist_depth_p * sqrt(h0/hp)+1);  // log on distance_p
+                                // scalar_t dist = dist_depth_p * sqrt(h0/hp);  // last version
                                 // scalar_t dist = dist_depth_p / ((p[p2][0]-p[p1][0])*(d0-p[p1][1])-(d1-p[p1][0])*(p[p2][1]-p[p1][1])) *
                                 //         ((p[p2][0]-p[p1][0])*(p[lift_point][1]-p[p1][1])-(p[lift_point][0]-p[p1][0])*(p[p2][1]-p[p1][1]));
                                 dist = (0 < dist) ? dist + eps : dist - eps;
@@ -648,7 +650,7 @@ __global__ void backward_pixel_map_cuda_kernel(
                                      p[p1][0], p[p1][1], p[p1][2],
                                      p[p2][0], p[p2][1], p[p2][2]);
                                 }
-                                grad_face[pi[lift_point] * 3 + 2] -= is * diff_grad_updown / dist;
+                                grad_face[pi[lift_point] * 3 + 2] -= diff_grad_updown / dist;
                             }
                             // top face push down
                             scalar_t pt[3][3];
@@ -679,11 +681,13 @@ __global__ void backward_pixel_map_cuda_kernel(
                                 scalar_t hp = ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) * ((xp-x1)*(y2-y1)-(yp-y1)*(x2-x1)) +
                                               ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) * ((xp-x1)*(z2-z1)-(zp-z1)*(x2-x1)) +
                                               ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1)) * ((yp-y1)*(z2-z1)-(zp-z1)*(y2-y1));
-                                scalar_t dist = - dist_depth_p * sqrt(h0/hp);
+                                scalar_t dist = -dist_depth_p * (exp(sqrt(h0/hp))+1);  // log on h0/hp (1, +inf)
+                                // scalar_t dist = exp(-dist_depth_p * sqrt(h0/hp)+1); // log on distance_p
+                                // scalar_t dist = - dist_depth_p * sqrt(h0/hp); //last version
                                 // scalar_t dist = -dist_depth_p / ((pt[p2][0]-pt[p1][0])*(d0-pt[p1][1])-(d1-pt[p1][0])*(pt[p2][1]-pt[p1][1])) *
                                 //         ((pt[p2][0]-pt[p1][0])*(pt[down_point][1]-pt[p1][1])-(pt[down_point][0]-pt[p1][0])*(pt[p2][1]-pt[p1][1]));
                                 dist = (0 < dist) ? dist + eps : dist - eps;
-                                grad_faces[*face_index_map_p * 9 + down_point * 3 + 2] -= is * diff_grad_updown / dist;
+                                grad_faces[*face_index_map_p * 9 + down_point * 3 + 2] -= diff_grad_updown / dist;
                             }
                         }
                     }

@@ -33,11 +33,9 @@ class TestRasterizeSilhouettes(unittest.TestCase):
         # load reference image by blender
         ref = imread(os.path.join(data_dir, 'teapot_blender.png'))
         ref = (ref.min(-1) != 255).astype(np.float32)
-
-        cv2.imshow("0", image)
-        cv2.imshow("1", ref)
-        cv2.waitKey()
-
+        # cv2.imshow("0", image)
+        # cv2.imshow("1", ref)
+        # cv2.waitKey()
         assert(np.allclose(ref, image))
 
     def test_backward_case1(self):
@@ -67,6 +65,7 @@ class TestRasterizeSilhouettes(unittest.TestCase):
         vertices, faces, grad_ref = utils.to_minibatch((vertices, faces, grad_ref))
         vertices.requires_grad = True
         images = renderer(vertices, faces, mode='silhouettes')
+        images = images.sum(dim=1)
         loss = torch.sum(torch.abs(images[:, pyi, pxi] - 1))
         loss.backward()
 
@@ -99,6 +98,7 @@ class TestRasterizeSilhouettes(unittest.TestCase):
         vertices, faces, grad_ref = utils.to_minibatch((vertices, faces, grad_ref))
         vertices.requires_grad = True
         images = renderer(vertices, faces, mode='silhouettes')
+        images = images.sum(dim=1)
         loss = torch.sum(torch.abs(images[:, pyi, pxi]))
         loss.backward()
 

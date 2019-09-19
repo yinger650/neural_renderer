@@ -336,7 +336,9 @@ def rasterize_rgbad(
         rgb = rgb[:, :, list(reversed(range(rgb.shape[2]))), :]
     if return_alpha:
         # alpha = alpha[:, ::-1, :]
-        alpha = alpha[:, list(reversed(range(alpha.shape[1]))), :]
+        # alpha = alpha[:, list(reversed(range(alpha.shape[1]))), :]
+        # alpha map is part level
+        alpha = alpha[:, :, list(reversed(range(alpha.shape[2]))), :]
     if return_depth:
         # depth = depth[:, ::-1, :]
         depth = depth[:, list(reversed(range(depth.shape[1]))), :]
@@ -425,7 +427,7 @@ def rasterize_silhouettes(
         ~torch.Tensor: Alpha channels. The shape is [batch size, image_size, image_size].
 
     """
-    return rasterize_rgbad(faces, None, part_mask, image_size, anti_aliasing, near, far, eps, None, False, True, False)['alpha']
+    return rasterize_rgbad(faces, None, part_mask, image_size, anti_aliasing, near, far, eps, None, False, True, True)['alpha']
 
 
 def rasterize_depth(
@@ -453,4 +455,4 @@ def rasterize_depth(
         ~torch.Tensor: Depth images. The shape is [batch size, image_size, image_size].
 
     """
-    return rasterize_rgbad(faces, None, part_mask, image_size, anti_aliasing, near, far, eps, None, False, False, True)['depth']
+    return rasterize_rgbad(faces, None, part_mask, image_size, anti_aliasing, near, far, eps, None, False, True, True)['depth']

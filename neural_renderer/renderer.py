@@ -280,7 +280,8 @@ class Renderer(nn.Module):
         # fill back
         if self.fill_back:
             faces = torch.cat((faces, faces[:, :, list(reversed(range(faces.shape[-1])))]), dim=1).detach()
-            textures = torch.cat((textures, textures.permute((0, 1, 4, 3, 2, 5))), dim=1)
+            if textures is not None:
+                textures = torch.cat((textures, textures.permute((0, 1, 4, 3, 2, 5))), dim=1)
 
         # lighting
         faces_lighting = nr.vertices_to_faces(vertices, faces)
