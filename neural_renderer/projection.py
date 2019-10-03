@@ -55,21 +55,21 @@ def projection_P(vertices, P, dist_coeffs, orig_size):
     x_ = x / (z + 1e-5)
     y_ = y / (z + 1e-5)
 
-    if dist_coeffs is None:
-        dist_coeffs = torch.tensor([[0., 0., 0., 0., 0.]], dtype=P.dtype, device=P.device).repeat(P.shape[0], 1)
-    # Get distortion coefficients from vector
-    k1 = dist_coeffs[:, None, 0]
-    k2 = dist_coeffs[:, None, 1]
-    p1 = dist_coeffs[:, None, 2]
-    p2 = dist_coeffs[:, None, 3]
-    k3 = dist_coeffs[:, None, 4]
-
-    # we use x_ for x' and x__ for x'' etc.
-    r = torch.sqrt(x_ ** 2 + y_ ** 2)
-    x__ = x_ * (1 + k1 * (r ** 2) + k2 * (r ** 4) + k3 * (r ** 6)) + 2 * p1 * x_ * y_ + p2 * (r ** 2 + 2 * x_ ** 2)
-    y__ = y_ * (1 + k1 * (r ** 2) + k2 * (r ** 4) + k3 * (r ** 6)) + p1 * (r ** 2 + 2 * y_ ** 2) + 2 * p2 * x_ * y_
-    x__ = 2 * (x__ - orig_size / 2.) / orig_size
-    y__ = 2 * (y__ - orig_size / 2.) / orig_size
+    # if dist_coeffs is None:
+    #     dist_coeffs = torch.tensor([[0., 0., 0., 0., 0.]], dtype=P.dtype, device=P.device).repeat(P.shape[0], 1)
+    # # Get distortion coefficients from vector
+    # k1 = dist_coeffs[:, None, 0]
+    # k2 = dist_coeffs[:, None, 1]
+    # p1 = dist_coeffs[:, None, 2]
+    # p2 = dist_coeffs[:, None, 3]
+    # k3 = dist_coeffs[:, None, 4]
+    #
+    # # we use x_ for x' and x__ for x'' etc.
+    # r = torch.sqrt(x_ ** 2 + y_ ** 2)
+    # x__ = x_ * (1 + k1 * (r ** 2) + k2 * (r ** 4) + k3 * (r ** 6)) + 2 * p1 * x_ * y_ + p2 * (r ** 2 + 2 * x_ ** 2)
+    # y__ = y_ * (1 + k1 * (r ** 2) + k2 * (r ** 4) + k3 * (r ** 6)) + p1 * (r ** 2 + 2 * y_ ** 2) + 2 * p2 * x_ * y_
+    x__ = 2 * (x_ - orig_size / 2.) / orig_size
+    y__ = - 2 * (y_ - orig_size / 2.) / orig_size
     vertices = torch.stack([x__, y__, z], dim=-1)
     return vertices
 
@@ -120,7 +120,7 @@ def projection_bbox(vertices, K, dist_coeffs, bbox, eps=1e-9):
     bs_half = bbox[:, None, 2] * 0.5
 
     u = (u - bx) / bs_half
-    v = (v - by) / bs_half
+    v = - (v - by) / bs_half
     # z = z * 0.001
 
     vertices = torch.stack([u, v, z], dim=-1)

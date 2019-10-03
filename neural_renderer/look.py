@@ -37,8 +37,8 @@ def look(vertices, eye, direction=[0, 1, 0], up=None):
 
     # create new axes
     z_axis = F.normalize(direction, eps=1e-5)
-    x_axis = F.normalize(torch.cross(up, z_axis), eps=1e-5)
-    y_axis = F.normalize(torch.cross(z_axis, x_axis), eps=1e-5)
+    x_axis = F.normalize(torch.cross(up, z_axis, dim=-1), eps=1e-5)
+    y_axis = F.normalize(torch.cross(z_axis, x_axis, dim=-1), eps=1e-5)
 
     # create rotation matrix: [bs, 3, 3]
     r = torch.cat((x_axis[:, None, :], y_axis[:, None, :], z_axis[:, None, :]), dim=1)

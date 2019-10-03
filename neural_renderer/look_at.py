@@ -46,8 +46,8 @@ def look_at(vertices, eye, at=[0, 0, 0], up=[0, 1, 0]):
     # create new axes
     # eps is chosen as 0.5 to match the chainer version
     z_axis = F.normalize(at - eye, eps=1e-5)
-    x_axis = F.normalize(torch.cross(up, z_axis), eps=1e-5)
-    y_axis = F.normalize(torch.cross(z_axis, x_axis), eps=1e-5)
+    x_axis = F.normalize(torch.cross(up, z_axis, dim=-1), eps=1e-5)
+    y_axis = F.normalize(torch.cross(z_axis, x_axis, dim=-1), eps=1e-5)
 
     # create rotation matrix: [bs, 3, 3]
     r = torch.cat((x_axis[:, None, :], y_axis[:, None, :], z_axis[:, None, :]), dim=1)

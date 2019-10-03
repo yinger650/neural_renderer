@@ -44,7 +44,7 @@ class Renderer(nn.Module):
             self.P = P
             if isinstance(self.P, numpy.ndarray):
                 self.P = torch.cuda.FloatTensor(self.P)
-            if self.P is None or P.ndimension() != 3 or self.P.shape[1] != 3 or self.P.shape[2] != 4:
+            elif self.P is None or P.ndimension() != 3 or self.P.shape[1] != 3 or self.P.shape[2] != 4:
                 raise ValueError('You need to provide a valid (batch_size)x3x4 projection matrix')
             self.dist_coeffs = dist_coeffs
             if dist_coeffs is None:

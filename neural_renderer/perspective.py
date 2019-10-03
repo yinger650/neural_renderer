@@ -16,6 +16,6 @@ def perspective(vertices, angle=30.):
     width = width[:, None] 
     z = vertices[:, :, 2]
     x = vertices[:, :, 0] / z / width
-    y = vertices[:, :, 1] / z / width
+    y = -vertices[:, :, 1] / z / width
     vertices = torch.stack((x,y,z), dim=2)
     return vertices

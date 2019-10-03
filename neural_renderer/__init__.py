@@ -5,7 +5,7 @@ from .look import look
 from .look_at import look_at
 from .mesh import Mesh
 from .perspective import perspective
-from .projection import projection
+from .projection import projection, projection_P, projection_bbox
 from .rasterize import (rasterize_rgbad, rasterize, rasterize_silhouettes, rasterize_depth, Rasterize)
 from .renderer import Renderer
 from .save_obj import save_obj
