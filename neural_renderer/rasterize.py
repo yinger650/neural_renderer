@@ -148,15 +148,15 @@ class RasterizeFunction(Function):
                                         ctx, faces, face_index_map, rgb_map, alpha_map,
                                         part_mask,
                                         grad_rgb_map, grad_alpha_map, grad_faces)
-        print(grad_faces.nonzero())
+        # print(grad_faces.nonzero())
         grad_textures = RasterizeFunction.backward_textures(
                                         ctx, face_index_map, sampling_weight_map,
                                         sampling_index_map, grad_rgb_map, grad_textures)
-        print(grad_textures.nonzero())
+        # print(grad_textures.nonzero())
         grad_faces = RasterizeFunction.backward_depth_map(
                                         ctx, faces, depth_map, face_index_map,
                                         face_inv_map, weight_map, grad_depth_map, grad_faces)
-        print(grad_faces.nonzero())
+        # print(grad_faces.nonzero())
 
         if not textures.requires_grad:
             grad_textures = None
