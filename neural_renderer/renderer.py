@@ -139,7 +139,7 @@ class Renderer(nn.Module):
                 dist_coeffs = self.dist_coeffs
             if orig_size is None:
                 orig_size = self.orig_size
-            vertices = nr.projection_P(vertices, self.P, self.dist_coeffs, self.orig_size)
+            vertices = nr.projection_P(vertices, P, dist_coeffs, orig_size)
         elif self.camera_mode == "projection_bbox":
             if K is None:
                 K = self.K
@@ -147,9 +147,7 @@ class Renderer(nn.Module):
                 bbox = self.bbox
             if dist_coeffs is None:
                 dist_coeffs = self.dist_coeffs
-            if orig_size is None:
-                orig_size = self.orig_size
-            vertices = nr.projection_bbox(vertices, self.K, self.dist_coeffs, self.bbox)
+            vertices = nr.projection_bbox(vertices, K, dist_coeffs, bbox)
 
 
         # rasterization
@@ -193,7 +191,7 @@ class Renderer(nn.Module):
                 dist_coeffs = self.dist_coeffs
             if orig_size is None:
                 orig_size = self.orig_size
-            vertices = nr.projection_P(vertices, self.P, self.dist_coeffs, self.orig_size)
+            vertices = nr.projection_P(vertices, P, dist_coeffs, orig_size)
         elif self.camera_mode == "projection_bbox":
             if K is None:
                 K = self.K
@@ -201,9 +199,7 @@ class Renderer(nn.Module):
                 bbox = self.bbox
             if dist_coeffs is None:
                 dist_coeffs = self.dist_coeffs
-            if orig_size is None:
-                orig_size = self.orig_size
-            vertices = nr.projection_bbox(vertices, self.K, self.dist_coeffs, self.bbox)
+            vertices = nr.projection_bbox(vertices, K, dist_coeffs, bbox)
 
         # rasterization
         faces = nr.vertices_to_faces(vertices, faces)

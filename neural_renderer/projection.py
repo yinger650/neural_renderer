@@ -121,7 +121,6 @@ def projection_bbox(vertices, K, dist_coeffs, bbox, eps=1e-9):
 
     u = (u - bx) / bs_half
     v = - (v - by) / bs_half
-    # z = z * 0.001
 
     vertices = torch.stack([u, v, z], dim=-1)
     return vertices
